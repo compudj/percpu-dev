@@ -1,7 +1,7 @@
 all:
-	gcc -O2 -o percpu -pthread percpu.c
+	./test-percpu.sh
 
 .PHONY: clean
 
 clean:
-	rm -f percpu
+	rm -f percpu-getcpu-nolock percpu-nolock percpu-lock-cmpxchg percpu-cmpxchg percpu-load-store

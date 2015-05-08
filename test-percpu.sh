@@ -1,7 +1,7 @@
 #!/bin/sh
 
 CC=gcc
-CFLAGS="-lpthread -Wall -O2"
+CFLAGS="-pthread -Wall -O2"
 
 RUNLIST="percpu-getcpu-nolock
 percpu-nolock
