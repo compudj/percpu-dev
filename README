@@ -1,0 +1,10 @@
+
+Kernel used: 3.17.4
+Userland percpu.c depends on Userspace RCU library
+(http://urcu.so)
+
+You may have to tune ulimit -l:
+max locked memory       (kbytes, -l) 64
+to a larger size at the moment if you want to try
+to more cores.
+
