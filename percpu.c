@@ -261,11 +261,6 @@ static int init_thread_percpu(void)
 	int ret;
 
 	tpu.mmap_range = map_range();
-	ret = mlock(&tpu, sizeof(tpu));
-	if (ret) {
-		perror("mlock");
-		return -1;
-	}
 	tpu.signo = SIGUSR1;
 	ret = percpu(&tpu);
 	if (ret) {
@@ -279,10 +274,6 @@ static void fini_thread_percpu(void)
 {
 	int ret;
 
-	ret = munlock(&tpu, sizeof(tpu));
-	if (ret) {
-		perror("munlock");
-	}
 	unmap_range(tpu.mmap_range);
 	tpu.mmap_range = NULL;
 }
