@@ -76,17 +76,6 @@ static inline pid_t gettid(void)
 #define _ASM_PTR	" .quad "
 #endif
 
-//#define NR_THREADS	64
-//#define NR_THREADS	16
-#define NR_THREADS	8
-//#define NR_THREADS	4
-//#define NR_THREADS	1
-/* For testing with multiple threads per cpu */
-//#define NR_CPUS		64
-//#define NR_CPUS		32
-//#define NR_CPUS		8
-#define NR_CPUS		8
-
 #define NR_CPU_INFO_MAX		4096
 #define MMAP_LEN		\
 		(NR_CPU_INFO_MAX * sizeof(struct cpu_info))
@@ -117,12 +106,16 @@ static const char *config_name = "loads+store";
 
 static const char *config_name = "getcpu + no locking";
 # define USE_GETCPU
+# define CHECK_SINGLE_THREAD_PER_CPU
 
 #else	/* no locking */
 
 static const char *config_name = "no getcpu + no locking";
+# define CHECK_SINGLE_THREAD_PER_CPU
 
 #endif
+
+static int nr_cpus;
 
 struct percpu_fault {
 	void *begin;
@@ -171,8 +164,36 @@ static inline int percpu(struct thread_percpu_user *tpu)
 
 static __thread struct thread_percpu_user tpu;
 
-static uint64_t thread_loops[NR_THREADS];
-static uint64_t nr_preempt_sig[NR_THREADS];
+struct test_thread_info {
+	uint64_t thread_loops;
+	uint64_t nr_preempt_sig;
+};
+
+static struct test_thread_info *test_thread_info;
+
+#ifdef CHECK_SINGLE_THREAD_PER_CPU
+static int check_thread_per_cpu(unsigned int nr_threads, unsigned int nr_cpus)
+{
+	return (nr_threads <= nr_cpus);
+}
+#else
+static int check_thread_per_cpu(unsigned int nr_threads, unsigned int nr_cpus)
+{
+	return 1;
+}
+#endif
+
+static int get_nr_cpus(void)
+{
+	long ret;
+
+	ret = sysconf(_SC_NPROCESSORS_ONLN);
+	if (ret < 0) {
+		perror("sysconf");
+		return -1;
+	}
+	return (int) ret;
+}
 
 static void set_affinity(int cpu)
 {
@@ -272,8 +293,6 @@ static int init_thread_percpu(void)
 
 static void fini_thread_percpu(void)
 {
-	int ret;
-
 	unmap_range(tpu.mmap_range);
 	tpu.mmap_range = NULL;
 }
@@ -420,14 +439,14 @@ static void *thread_fct(void *arg)
 {
 	int ret;
 	int thread_nr = (long) arg;
-	int cpu = thread_nr % NR_CPUS;
+	int cpu = thread_nr % nr_cpus;
 	uint64_t loop_count = 0;
 
 	tpu.thread_nr = thread_nr;
 
 	set_affinity(cpu);
 
-	sigsafe_fprintf(stderr, "[tid: %d, cpu: %d] Thread starts\n",
+	sigsafe_fprintf_dbg(stderr, "[tid: %d, cpu: %d] Thread starts\n",
 		gettid(), cpu);
 	ret = init_thread_percpu();
 	if (ret) {
@@ -462,18 +481,17 @@ static void *thread_fct(void *arg)
 		}
 	}
 	fini_thread_percpu();
-	thread_loops[thread_nr] = loop_count;
+	test_thread_info[thread_nr].thread_loops = loop_count;
 	return NULL;
 }
 
 static void print_regs(ucontext_t *ctx)
 {
-	mcontext_t *mctx = &ctx->uc_mcontext;
 	int i;
 
 	for (i = 0; i < NGREG; i++) {
 		sigsafe_fprintf_dbg(stderr, "greg[%d]: %p\n",
-			i, (void *) mctx->gregs[i]);
+			i, (void *) ctx->uc_mcontext.mctx->gregs[i]);
 	}
 }
 
@@ -553,7 +571,7 @@ static void sighandler(int sig, siginfo_t *siginfo, void *data)
 			}
 			CMM_STORE_SHARED(tpu.protected, 1);
 		}
-		nr_preempt_sig[tpu.thread_nr]++;
+		test_thread_info[tpu.thread_nr].nr_preempt_sig++;
 		break;
 	}
 	default:
@@ -583,7 +601,7 @@ static int set_signal_handler(void)
 		perror("sigaction");
 		return ret;
 	}
-	sigsafe_fprintf(stderr, "[tid: %d] Signal handler set for SIGSEGV, SIGUSR1\n",
+	sigsafe_fprintf_dbg(stderr, "[tid: %d] Signal handler set for SIGSEGV, SIGUSR1\n",
 			gettid());
 
 	return ret;
@@ -666,39 +684,61 @@ error:
 
 int main(int argc, char **argv)
 {
-	int ret, i;
-	int err;
-	pthread_t tid[NR_THREADS];
+	int ret, i, retval = -1, err;
+	pthread_t *tids;
 	void *tret;
 	uint64_t tot_loops = 0, tot_sig = 0;
 	unsigned int remain, duration;
+	int nr_threads;
 
-	if (argc < 3) {
-		fprintf(stderr, "Usage: %s [seconds] [delay_loop]\n",
+	if (argc < 4) {
+		fprintf(stderr, "Usage: %s [nr_threads] [seconds] [delay_loop]\n",
 			argv[0]);
-		goto error;
+		goto end;
 	}
-	duration = atoi(argv[1]);
+	nr_threads = atoi(argv[1]);
+	if (nr_threads < 0) {
+		fprintf(stderr, "Use integer >= 0 for nr_threads\n");
+		goto end;
+	}
+	duration = atoi(argv[2]);
 	if (duration < 0) {
 		fprintf(stderr, "Use positive integer for seconds\n");
-		goto error;
+		goto end;
 	}
-	delay_loop = atoi(argv[2]);
+	delay_loop = atoi(argv[3]);
 	if (delay_loop < 0) {
 		fprintf(stderr, "Use positive integer for delay_loop\n");
-		goto error;
+		goto end;
+	}
+	nr_cpus = get_nr_cpus();
+	if (nr_cpus <= 0) {
+		fprintf(stderr, "Error getting the number of CPUs\n");
+		goto end;
+	}
+
+	if (!check_thread_per_cpu(nr_threads, nr_cpus)) {
+		fprintf(stderr, "Incompatible number of threads %d and number of cpus %d\n",
+				nr_threads, nr_cpus);
+		goto end;
 	}
 	ret = init_percpu();
 	if (ret) {
 		fprintf(stderr, "init_percpu error\n");
-		goto error;
+		goto end;
 	}
+	test_thread_info = calloc(nr_threads, sizeof(*test_thread_info));
+	if (!test_thread_info)
+		goto end_fini_percpu;
+	tids = calloc(nr_threads, sizeof(*tids));
+	if (!tids)
+		goto end_free_test_thread_info;
 
-	for (i = 0; i < NR_THREADS; i++) {
-		err = pthread_create(&tid[i], NULL, thread_fct,
+	for (i = 0; i < nr_threads; i++) {
+		err = pthread_create(&tids[i], NULL, thread_fct,
 			(void *) (long) i);
 		if (err != 0)
-			goto error;
+			goto end_free_tids;
 	}
 
 	cmm_smp_mb();
@@ -712,26 +752,34 @@ int main(int argc, char **argv)
 
 	test_stop = 1;
 
-	for (i = 0; i < NR_THREADS; i++) {
-		err = pthread_join(tid[i], &tret);
+	for (i = 0; i < nr_threads; i++) {
+		err = pthread_join(tids[i], &tret);
 		if (err != 0)
-			goto error;
-		tot_loops += thread_loops[i];
-		tot_sig += nr_preempt_sig[i];
+			goto end_free_tids;
+		tot_loops += test_thread_info[i].thread_loops;
+		tot_sig += test_thread_info[i].nr_preempt_sig;
 	}
 
 	fprintf(stderr, "SUMMARY: [%s] %u threads, %u cores, %u delay loops, %" PRIu64 " loops, %" PRIu64 " preempt signals / %d s  (%4g ns/[loops/core])\n",
-		config_name, NR_THREADS, NR_CPUS, delay_loop,
+		config_name, nr_threads, nr_cpus, delay_loop,
 		tot_loops, tot_sig, duration,
-		(double) duration * min(NR_CPUS, NR_THREADS) * 1000000000ULL/ (double) tot_loops);
+		(double) duration * min(nr_cpus, nr_threads) * 1000000000ULL/ (double) tot_loops);
 
+	retval = 0;
+
+end_free_tids:
+	free(tids);
+end_free_test_thread_info:
+	free(test_thread_info);
+end_fini_percpu:
 	ret = fini_percpu();
 	if (ret) {
-		goto error;
+		retval = -1;
+		fprintf(stderr, "Error in fini_percpu\n");
 	}
-
-	exit(EXIT_SUCCESS);
-
-error:
-	exit(EXIT_FAILURE);
+end:
+	if (!retval)
+		exit(EXIT_SUCCESS);
+	else
+		exit(EXIT_FAILURE);
 }
