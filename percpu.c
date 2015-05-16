@@ -564,7 +564,7 @@ static void sighandler(int sig, siginfo_t *siginfo, void *data)
 		/* Protect memory range */
 		if (CMM_LOAD_SHARED(tpu.nesting)) {
 			sigsafe_fprintf_dbg(stderr, "Nested within C.S., protect pages.\n");
-			ret = mprotect(tpu.mmap_range, MMAP_LEN, PROT_NONE);
+			ret = mprotect(tpu.mmap_range, MMAP_LEN, PROT_READ);
 			if (ret) {
 				perror("mprotect");
 				abort();
