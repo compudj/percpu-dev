@@ -159,7 +159,7 @@ struct thread_percpu_user {
 
 static inline int percpu(struct thread_percpu_user *tpu)
 {
-	return syscall(SYS_percpu, tpu);
+	return syscall(SYS_percpu, tpu, 0);
 }
 
 static __thread struct thread_percpu_user tpu;
