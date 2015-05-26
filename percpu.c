@@ -375,6 +375,7 @@ static inline void inline_unlock(int *lock)
 {
 #ifdef USE_UNLOCK
 	/* Not needed for x86-TSO: cmm_smp_mb(); */
+	cmm_barrier();
 	uatomic_set(lock, 0);
 #endif
 }
