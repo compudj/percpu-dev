@@ -1,4 +1,5 @@
 all:
+	gcc -Wall -O2 -pthread -o getcpu-cache getcpu-cache.c
 	./test-percpu.sh
 
 .PHONY: clean
