@@ -189,11 +189,14 @@ static void *thread_fct(void *arg)
 	int ret;
 	int thread_nr = (long) arg;
 	int cpu = thread_nr % nr_cpus;
-	uint64_t loop_count = 0;
+	int last_cpu, cur_cpu;
+	uint64_t loop_count = 0,
+		diff_count = 0,
+		migrate_count = 0;
 
-	set_affinity(cpu);
+	//set_affinity(cpu);
 
-	sigsafe_fprintf_dbg(stderr, "[tid: %d, cpu: %d] Thread starts\n",
+	sigsafe_fprintf(stderr, "[tid: %d, cpu: %d] Thread starts\n",
 		gettid(), cpu);
 	ret = init_thread_getcpu_cache();
 	if (ret) {
@@ -204,19 +207,28 @@ static void *thread_fct(void *arg)
 	}
 	cmm_smp_mb();
 
+	last_cpu = curcpu_cache;
 	for (;;) {
-		if (curcpu_cache != sched_getcpu()) {
-			sigsafe_fprintf(stderr, "Incorrect CPU number\n");
-			abort();
-		}
-		do_delay_loop(delay_loop);
+		cur_cpu = curcpu_cache;
+		if (cur_cpu != sched_getcpu())
+			diff_count++;
 		loop_count++;
+		if (cur_cpu != last_cpu)
+			migrate_count++;
+		if (!(loop_count & 0xfffffff))
+			sigsafe_fprintf(stderr, "[tid: %d] Thread status: %" PRIu64 " diff. CPUs cache vs sched_getcpu(), %" PRIu64 " migrations.\n",
+				gettid(), diff_count, migrate_count);
+		last_cpu = cur_cpu;
+		do_delay_loop(delay_loop);
 		if (caa_unlikely(test_stop)) {
 			break;
 		}
 	}
 	fini_thread_percpu();
 	test_thread_info[thread_nr].thread_loops = loop_count;
+	sigsafe_fprintf(stderr, "[tid: %d] Thread end: %" PRIu64 " diff. CPUs cache vs sched_getcpu(), %" PRIu64 " migrations.\n",
+		gettid(), diff_count, migrate_count);
+
 	return NULL;
 }
 
