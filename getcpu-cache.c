@@ -194,7 +194,7 @@ static void *thread_fct(void *arg)
 		diff_count = 0,
 		migrate_count = 0;
 
-	//set_affinity(cpu);
+	set_affinity(cpu);
 
 	sigsafe_fprintf(stderr, "[tid: %d, cpu: %d] Thread starts\n",
 		gettid(), cpu);
@@ -207,9 +207,9 @@ static void *thread_fct(void *arg)
 	}
 	cmm_smp_mb();
 
-	last_cpu = curcpu_cache;
+	last_cpu = CMM_LOAD_SHARED(curcpu_cache);
 	for (;;) {
-		cur_cpu = curcpu_cache;
+		cur_cpu = CMM_LOAD_SHARED(curcpu_cache);
 		if (cur_cpu != sched_getcpu())
 			diff_count++;
 		loop_count++;
