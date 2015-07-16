@@ -94,12 +94,12 @@ static unsigned int delay_loop;
 
 static __thread int32_t curcpu_cache;
 
-#define __NR_getcpu_cache	323
-#define SYS_getcpu_cache	__NR_getcpu_cache
+#define __NR_thread_local_abi	323
+#define SYS_thread_local_abi	__NR_thread_local_abi
 
-static inline int getcpu_cache(int32_t *gcp, int flags)
+static inline int thread_local_abi(int32_t *tlap, size_t len, int flags)
 {
-	return syscall(SYS_getcpu_cache, gcp, flags);
+	return syscall(SYS_thread_local_abi, tlap, len, flags);
 }
 
 static int get_nr_cpus(void)
@@ -161,11 +161,15 @@ static void signal_restore(sigset_t oldset)
 
 static int init_thread_getcpu_cache(void)
 {
-	int ret;
+	ssize_t ret;
 
-	ret = getcpu_cache(&curcpu_cache, 0);
-	if (ret) {
+	ret = thread_local_abi(&curcpu_cache, sizeof(curcpu_cache), 0);
+	if (ret < 0) {
 		perror("getcpu_cache");
+		return -1;
+	} else if (ret < sizeof(curcpu_cache)) {
+		fprintf(stderr, "thread_local_abi returned %zd\n",
+			ret);
 		return -1;
 	}
 	return 0;
